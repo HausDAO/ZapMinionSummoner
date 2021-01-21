@@ -28,7 +28,7 @@ Note: TODO is alter the zap rate to accept less than 1 ETH per share.
 
 ## Use 
 
-Prospective members just need to send their ETH directly to the ZapMinion address. The ZapMinion uses a recieve function to deal with the submission of the membership proposal. The membership proposal will be submitted in WETH, with msg.value * Zap Rate / (10**18). The details for the proposal will be whatever is in the Zap Details. 
+Prospective members just need to send their ETH directly to the ZapMinion address. The ZapMinion uses a recieve function to deal with the submission of the membership proposal. The membership proposal will be submitted in WETH, with msg.value / Zap Rate / (10**18). The details for the proposal will be whatever is in the Zap Details. 
 
 A Zap sender can still cancel their membership proposal, if it has not been sponsored in the Moloch, by calling cancelZapProposal with the proposalId that corresponds to their membership proposal. After the proposal is canceled they can recover their funds in WETH by calling drawZapProposal again with the correct proposalId. 
 
