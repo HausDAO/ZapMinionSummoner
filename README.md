@@ -44,6 +44,7 @@ Finally, a ZapMinion's manager can update the ZapMinion's configs by calling upd
 
 ## Deployments
 
-xDAI (shares zap) - 0x9dF88555cA07825309BB9662D7d875E309572ecC
-xDAI (loot zap) - 0x7DaF47E09CDf2A5CAE281D17f4793CB6CA4c018F
+- xDAI (shares zap) - 0x9dF88555cA07825309BB9662D7d875E309572ecC
+
+- xDAI (loot zap) - 0x7DaF47E09CDf2A5CAE281D17f4793CB6CA4c018F
 
