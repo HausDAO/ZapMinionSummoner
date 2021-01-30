@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-pragma solidity 0.7.5;
+pragma solidity 0.6.12;
 
 interface IERC20ApproveTransfer { // interface for erc20 approve/transfer
     function approve(address spender, uint256 amount) external returns (bool);
@@ -29,7 +29,7 @@ contract ReentrancyGuard { // call wrapper for reentrancy check
     uint256 private constant _ENTERED = 2;
     uint256 private _status;
 
-    constructor() {
+    constructor() public {
         _status = _NOT_ENTERED;
     }
 
@@ -108,11 +108,18 @@ abstract contract Ownable is Context {
 
 interface IMOLOCH { // brief interface for moloch dao v2
 
-    function cancelProposal(uint256 proposalId) external;
-    
+
     function depositToken() external view returns (address);
     
+    function tokenWhitelist(address token) external view returns (bool);
+    
     function getProposalFlags(uint256 proposalId) external view returns (bool[6] memory);
+    
+    function members(address user) external view returns (address, uint256, uint256, bool, uint256, uint256);
+    
+    function userTokenBalances(address user, address token) external view returns (uint256);
+    
+    function cancelProposal(uint256 proposalId) external;
 
     function submitProposal(
         address applicant,
@@ -128,13 +135,14 @@ interface IMOLOCH { // brief interface for moloch dao v2
     function withdrawBalance(address token, uint256 amount) external;
 }
 
+
 contract ZapMinion is ReentrancyGuard {
     using SafeMath for uint256;
     
     IMOLOCH public moloch;
     
     address public manager; // account that manages moloch zap proposal settings (e.g., moloch via adminion)
-    address public wETH; // ether token wrapper contract reference for zap proposals
+    address public wrapper; // ether token wrapper contract reference for zap proposals
     uint256 public zapRate; // rate to convert ether into zap proposal share request (e.g., `10` = 10 shares per 1 ETH sent)
     string public ZAP_DETAILS; // general zap proposal details to attach
     bool private initialized; // internally tracks deployment under eip-1167 proxy pattern
@@ -144,57 +152,61 @@ contract ZapMinion is ReentrancyGuard {
     struct Zap {
         address proposer;
         uint256 zapAmount;
+        bool processed;
     }
 
-    event ProposeZap(address indexed proposer, uint256 proposalId);
+    event ProposeZap(uint256 amount, address indexed proposer, uint256 proposalId);
     event WithdrawZapProposal(address indexed proposer, uint256 proposalId);
     event UpdateZapMol(address indexed manager, address indexed moloch, address indexed wETH, uint256 zapRate, string ZAP_DETAILS);
 
     function init(
         address _manager, 
         address _moloch, 
-        address _wETH, 
+        address _wrapper, 
         uint256 _zapRate, 
         string memory _ZAP_DETAILS
     ) external {
         manager = _manager;
         moloch = IMOLOCH(_moloch);
-        wETH = _wETH;
+        wrapper = _wrapper;
         zapRate = _zapRate;
         ZAP_DETAILS = _ZAP_DETAILS;
-        IERC20ApproveTransfer(wETH).approve(address(moloch), uint256(-1));
+        IERC20ApproveTransfer(wrapper).approve(address(moloch), uint256(-1));
         initialized = true; 
     }
     
     receive() external payable nonReentrant { // caller submits share proposal to moloch per zap rate and msg.value
-        (bool success, ) = wETH.call{value: msg.value}("");
+        (bool success, ) = wrapper.call{value: msg.value}("");
         require(success, "ZapMol::receive failed");
         require(msg.value >= zapRate, "not enough tribute");
         
         uint256 proposalId = moloch.submitProposal(
             msg.sender,
-            msg.value.div(zapRate).div(10**18),
             0,
+            msg.value.div(zapRate).div(10**18), // loot shares
             msg.value,
-            wETH,
+            wrapper,
             0,
-            wETH,
+            wrapper,
             ZAP_DETAILS
         );
         
-        zaps[proposalId] = Zap(msg.sender, msg.value);
+        zaps[proposalId] = Zap(msg.sender, msg.value, false);
 
-        emit ProposeZap(msg.sender, proposalId);
+        emit ProposeZap(msg.value, msg.sender, proposalId);
     }
+    
+    
     
     function cancelZapProposal(uint256 proposalId) external nonReentrant { // zap proposer can cancel zap & withdraw proposal funds 
         Zap storage zap = zaps[proposalId];
         require(msg.sender == zap.proposer, "ZapMol::!proposer");
+        require(!zap.processed, "ZapMol::already processedr");
         uint256 zapAmount = zap.zapAmount;
         
         moloch.cancelProposal(proposalId); // cancel zap proposal in parent moloch
-        moloch.withdrawBalance(wETH, zapAmount); // withdraw zap funds from moloch
-        IERC20ApproveTransfer(wETH).transfer(msg.sender, zapAmount); // redirect funds to zap proposer
+        moloch.withdrawBalance(wrapper, zapAmount); // withdraw zap funds from moloch
+        IERC20ApproveTransfer(wrapper).transfer(msg.sender, zapAmount); // redirect funds to zap proposer
         
         emit WithdrawZapProposal(msg.sender, proposalId);
     }
@@ -202,10 +214,12 @@ contract ZapMinion is ReentrancyGuard {
     function drawZapProposal(uint256 proposalId) external nonReentrant { // if proposal fails, withdraw back to proposer
         Zap storage zap = zaps[proposalId];
         require(msg.sender == zap.proposer, "ZapMol::!proposer");
+        require(!zap.processed, "ZapMol::already processedr");
         uint256 zapAmount = zap.zapAmount;
         
-        moloch.withdrawBalance(wETH, zapAmount); // withdraw zap funds from parent moloch
-        IERC20ApproveTransfer(wETH).transfer(msg.sender, zapAmount); // redirect funds to zap proposer
+        moloch.withdrawBalance(wrapper, zapAmount); // withdraw zap funds from parent moloch
+        IERC20ApproveTransfer(wrapper).transfer(msg.sender, zapAmount); // redirect funds to zap proposer
+        zap.processed = true;
         
         emit WithdrawZapProposal(msg.sender, proposalId);
     }
@@ -213,7 +227,7 @@ contract ZapMinion is ReentrancyGuard {
     function updateZapMol( // manager adjusts zap proposal settings
         address _manager, 
         address _moloch, 
-        address _wETH, 
+        address _wrapper, 
         uint256 _zapRate, 
         string calldata _ZAP_DETAILS
     ) external nonReentrant { 
@@ -221,11 +235,11 @@ contract ZapMinion is ReentrancyGuard {
        
         manager = _manager;
         moloch = IMOLOCH(_moloch);
-        wETH = _wETH;
+        wrapper = _wrapper;
         zapRate = _zapRate;
         ZAP_DETAILS = _ZAP_DETAILS;
         
-        emit UpdateZapMol(_manager, _moloch, _wETH, _zapRate, _ZAP_DETAILS);
+        emit UpdateZapMol(_manager, _moloch, _wrapper, _zapRate, _ZAP_DETAILS);
     }
 }
 
@@ -263,21 +277,26 @@ contract CloneFactory {
     }
 }
 
+// 0xd0A1E359811322d97991E03f863a0C30C2cF029C - wETH
+// 0x7136fbDdD4DFfa2369A9283B6E90A040318011Ca - manager
+// 0x901D2a2a7e8151EC4A27e607cEDB5B9930618128 - moloch 
+// 1 - rate 
+
 contract ZapMinionFactory is CloneFactory, Ownable {
     
     address payable immutable public template; // fixed template for minion using eip-1167 proxy pattern
     
     event SummonMinion(address indexed minion, address manager, address indexed moloch, uint256 zapRate, string name);
     
-    constructor(address payable _template) {
+    constructor(address payable _template) public {
         template = _template;
     }
     
     // @DEV - zapRate should be entered in ETH
-    function summonZapMinion(address _manager, address _moloch, address _wETH, uint256 _zapRate, string memory _ZAP_DETAILS) external returns (address) {
+    function summonZapMinion(address _manager, address _moloch, address _wrapper, uint256 _zapRate, string memory _ZAP_DETAILS) external returns (address) {
         
         ZapMinion zapminion = ZapMinion(createClone(template));
-        zapminion.init(_manager, _moloch, _wETH, _zapRate, _ZAP_DETAILS );
+        zapminion.init(_manager, _moloch, _wrapper, _zapRate, _ZAP_DETAILS );
         string memory name = "Zap minion";
         
         emit SummonMinion(address(zapminion), _manager, _moloch, _zapRate, name);
