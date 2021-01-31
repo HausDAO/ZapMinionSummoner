@@ -200,13 +200,16 @@ contract ZapMinion is ReentrancyGuard {
     
     function cancelZapProposal(uint256 proposalId) external nonReentrant { // zap proposer can cancel zap & withdraw proposal funds 
         Zap storage zap = zaps[proposalId];
+        bool[6] memory flags = moloch.getProposalFlags(proposalId);
         require(msg.sender == zap.proposer, "ZapMol::!proposer");
-        require(!zap.processed, "ZapMol::already processedr");
+        require(!flags[0], "ZapMol::already sponsored");
+        require(!zap.processed, "ZapMol::already processed");
         uint256 zapAmount = zap.zapAmount;
         
         moloch.cancelProposal(proposalId); // cancel zap proposal in parent moloch
         moloch.withdrawBalance(wrapper, zapAmount); // withdraw zap funds from moloch
         IERC20ApproveTransfer(wrapper).transfer(msg.sender, zapAmount); // redirect funds to zap proposer
+        zap.processed = true;
         
         emit WithdrawZapProposal(msg.sender, proposalId);
     }
@@ -216,7 +219,8 @@ contract ZapMinion is ReentrancyGuard {
         bool[6] memory flags = moloch.getProposalFlags(proposalId);
         require(msg.sender == zap.proposer, "ZapMol::!proposer");
         require(!zap.processed, "ZapMol::already processed");
-        require(!flags[2], "ZapMol::proposal passed");
+        require(flags[1] && !flags[2], "ZapMol::proposal passed");
+        
         uint256 zapAmount = zap.zapAmount;
         
         moloch.withdrawBalance(wrapper, zapAmount); // withdraw zap funds from parent moloch
@@ -307,5 +311,3 @@ contract ZapMinionFactory is CloneFactory, Ownable {
     }
     
 }
-
-
