@@ -213,8 +213,10 @@ contract ZapMinion is ReentrancyGuard {
     
     function drawZapProposal(uint256 proposalId) external nonReentrant { // if proposal fails, withdraw back to proposer
         Zap storage zap = zaps[proposalId];
+        bool[6] memory flags = moloch.getProposalFlags(proposalId);
         require(msg.sender == zap.proposer, "ZapMol::!proposer");
-        require(!zap.processed, "ZapMol::already processedr");
+        require(!zap.processed, "ZapMol::already processed");
+        require(!flags[2], "ZapMol::proposal passed");
         uint256 zapAmount = zap.zapAmount;
         
         moloch.withdrawBalance(wrapper, zapAmount); // withdraw zap funds from parent moloch
@@ -305,3 +307,5 @@ contract ZapMinionFactory is CloneFactory, Ownable {
     }
     
 }
+
+
