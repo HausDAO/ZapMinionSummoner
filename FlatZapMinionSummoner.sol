@@ -141,7 +141,7 @@ contract ZapMinion is ReentrancyGuard {
     
     IMOLOCH public moloch;
     
-    address public manager; // account that manages moloch zap proposal settings (e.g., moloch via adminion)
+    address public manager; // account that manages moloch zap proposal settings (e.g., moloch via a minion)
     address public wrapper; // ether token wrapper contract reference for zap proposals
     uint256 public zapRate; // rate to convert ether into zap proposal share request (e.g., `10` = 10 shares per 1 ETH sent)
     string public ZAP_DETAILS; // general zap proposal details to attach
@@ -151,8 +151,9 @@ contract ZapMinion is ReentrancyGuard {
     
     struct Zap {
         address proposer;
-        uint256 zapAmount;
         bool processed;
+        uint256 zapAmount;
+       
     }
 
     event ProposeZap(uint256 amount, address indexed proposer, uint256 proposalId);
@@ -166,6 +167,7 @@ contract ZapMinion is ReentrancyGuard {
         uint256 _zapRate, 
         string memory _ZAP_DETAILS
     ) external {
+        require(!initialized, "ZapMol::initialized");
         manager = _manager;
         moloch = IMOLOCH(_moloch);
         wrapper = _wrapper;
@@ -178,7 +180,8 @@ contract ZapMinion is ReentrancyGuard {
     receive() external payable nonReentrant { // caller submits share proposal to moloch per zap rate and msg.value
         (bool success, ) = wrapper.call{value: msg.value}("");
         require(success, "ZapMol::receive failed");
-        require(msg.value >= zapRate, "not enough tribute");
+        require(msg.value % 10**18  == 0, "ZapMol::wrapper issue");
+        require(msg.value >= zapRate && msg.value % zapRate  == 0, "ZapMol::no fractional shares");
         
         uint256 proposalId = moloch.submitProposal(
             msg.sender,
@@ -191,7 +194,7 @@ contract ZapMinion is ReentrancyGuard {
             ZAP_DETAILS
         );
         
-        zaps[proposalId] = Zap(msg.sender, msg.value, false);
+        zaps[proposalId] = Zap(msg.sender, false, msg.value);
 
         emit ProposeZap(msg.value, msg.sender, proposalId);
     }
@@ -200,32 +203,33 @@ contract ZapMinion is ReentrancyGuard {
     
     function cancelZapProposal(uint256 proposalId) external nonReentrant { // zap proposer can cancel zap & withdraw proposal funds 
         Zap storage zap = zaps[proposalId];
-        bool[6] memory flags = moloch.getProposalFlags(proposalId);
         require(msg.sender == zap.proposer, "ZapMol::!proposer");
-        require(!flags[0], "ZapMol::already sponsored");
         require(!zap.processed, "ZapMol::already processed");
-        uint256 zapAmount = zap.zapAmount;
+        bool[6] memory flags = moloch.getProposalFlags(proposalId);
+        require(!flags[0], "ZapMol::already sponsored");
         
+        uint256 zapAmount = zap.zapAmount;
         moloch.cancelProposal(proposalId); // cancel zap proposal in parent moloch
         moloch.withdrawBalance(wrapper, zapAmount); // withdraw zap funds from moloch
-        IERC20ApproveTransfer(wrapper).transfer(msg.sender, zapAmount); // redirect funds to zap proposer
         zap.processed = true;
+
+        IERC20ApproveTransfer(wrapper).transfer(msg.sender, zapAmount); // redirect funds to zap proposer
         
         emit WithdrawZapProposal(msg.sender, proposalId);
     }
     
     function drawZapProposal(uint256 proposalId) external nonReentrant { // if proposal fails, withdraw back to proposer
         Zap storage zap = zaps[proposalId];
-        bool[6] memory flags = moloch.getProposalFlags(proposalId);
         require(msg.sender == zap.proposer, "ZapMol::!proposer");
         require(!zap.processed, "ZapMol::already processed");
+        bool[6] memory flags = moloch.getProposalFlags(proposalId);
         require(flags[1] && !flags[2], "ZapMol::proposal passed");
         
         uint256 zapAmount = zap.zapAmount;
-        
         moloch.withdrawBalance(wrapper, zapAmount); // withdraw zap funds from parent moloch
-        IERC20ApproveTransfer(wrapper).transfer(msg.sender, zapAmount); // redirect funds to zap proposer
         zap.processed = true;
+                
+        IERC20ApproveTransfer(wrapper).transfer(msg.sender, zapAmount); // redirect funds to zap proposer
         
         emit WithdrawZapProposal(msg.sender, proposalId);
     }
@@ -301,9 +305,9 @@ contract ZapMinionFactory is CloneFactory, Ownable {
     // @DEV - zapRate should be entered in ETH
     function summonZapMinion(address _manager, address _moloch, address _wrapper, uint256 _zapRate, string memory _ZAP_DETAILS) external returns (address) {
         
+        string memory name = "Zap minion";
         ZapMinion zapminion = ZapMinion(createClone(template));
         zapminion.init(_manager, _moloch, _wrapper, _zapRate, _ZAP_DETAILS );
-        string memory name = "Zap minion";
         
         emit SummonMinion(address(zapminion), _manager, _moloch, _zapRate, name);
         
@@ -311,3 +315,4 @@ contract ZapMinionFactory is CloneFactory, Ownable {
     }
     
 }
+
