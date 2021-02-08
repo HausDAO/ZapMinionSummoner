@@ -144,10 +144,12 @@ contract ZapMinion is ReentrancyGuard {
     address public manager; // account that manages moloch zap proposal settings (e.g., moloch via a minion)
     address public wrapper; // ether token wrapper contract reference for zap proposals
     uint256 public zapRate; // rate to convert ether into zap proposal share request (e.g., `10` = 10 shares per 1 ETH sent)
+    uint256 public updateCount; 
     string public ZAP_DETAILS; // general zap proposal details to attach
     bool private initialized; // internally tracks deployment under eip-1167 proxy pattern
 
     mapping(uint256 => Zap) public zaps; // proposalId => Zap
+    mapping(uint256 => Update) public updates;
     
     struct Zap {
         address proposer;
@@ -155,10 +157,20 @@ contract ZapMinion is ReentrancyGuard {
         uint256 zapAmount;
        
     }
+    
+    struct Update {
+        bool implemented;
+        uint256 startBlock;
+        uint256 newRate; 
+        address manager;
+        address wrapper;
+        string newDetails;
+    }
 
     event ProposeZap(uint256 amount, address indexed proposer, uint256 proposalId);
     event WithdrawZapProposal(address indexed proposer, uint256 proposalId);
-    event UpdateZapMol(address indexed manager, address indexed moloch, address indexed wETH, uint256 zapRate, string ZAP_DETAILS);
+    event UpdateZapMol(address indexed manager, address indexed wrapper, uint256 zapRate, string ZAP_DETAILS);
+    event UpdateImplemented(bool implemented);
 
     function init(
         address _manager, 
@@ -236,21 +248,33 @@ contract ZapMinion is ReentrancyGuard {
     
     function updateZapMol( // manager adjusts zap proposal settings
         address _manager, 
-        address _moloch, 
         address _wrapper, 
         uint256 _zapRate, 
         string calldata _ZAP_DETAILS
     ) external nonReentrant { 
         require(msg.sender == manager, "ZapMol::!manager");
-       
-        manager = _manager;
-        moloch = IMOLOCH(_moloch);
-        wrapper = _wrapper;
-        zapRate = _zapRate;
-        ZAP_DETAILS = _ZAP_DETAILS;
+        require(!updates[updateCount].implemented || updateCount == 0, "ZapMol::prior update !implemented");
+        updateCount++;
+        updates[updateCount] = Update(false, block.timestamp, _zapRate, _manager, _wrapper, _ZAP_DETAILS);
         
-        emit UpdateZapMol(_manager, _moloch, _wrapper, _zapRate, _ZAP_DETAILS);
+        emit UpdateZapMol(_manager, _wrapper, _zapRate, _ZAP_DETAILS);
     }
+    
+    function implmentUpdate(uint256 updateId) external nonReentrant returns (bool) {
+        Update memory update = updates[updateId];
+        require(!update.implemented, "ZapMol:: already implemented");
+        require(updates[updateId-1].implemented, "ZapMol:: must implement prior update");
+        require(block.timestamp > update.startBlock, "ZapMol:: must wait to implement");
+    
+        zapRate = update.newRate;
+        manager = update.manager;
+        wrapper = update.wrapper;
+        ZAP_DETAILS = update.newDetails; 
+        
+     emit UpdateImplemented(true);
+     return true;
+  
+    }  
 }
 
 
@@ -302,7 +326,7 @@ contract ZapMinionFactory is CloneFactory, Ownable {
         template = _template;
     }
     
-    // @DEV - zapRate should be entered in ETH
+    // @DEV - zapRate should be entered in whole ETH or xDAI
     function summonZapMinion(address _manager, address _moloch, address _wrapper, uint256 _zapRate, string memory _ZAP_DETAILS) external returns (address) {
         
         string memory name = "Zap minion";
@@ -315,4 +339,3 @@ contract ZapMinionFactory is CloneFactory, Ownable {
     }
     
 }
-
